@@ -3,31 +3,275 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>证券结算与企业行动处理</title>
+  <title>证券结算与违约处置</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem; color: #17212b; background: #f7f8fa; }
+    main { max-width: 1080px; margin: auto; }
+    h1 { margin-bottom: .2rem; }
+    .tabs { display: flex; gap: .5rem; margin: 1rem 0; }
+    .tabs button { border: 1px solid #c8d0d8; background: #fff; }
+    .tabs button.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    section.panel { display: none; background: #fff; border: 1px solid #e2e6ea; border-radius: 10px; padding: 1.1rem; }
+    section.panel.active { display: block; }
+    button { padding: .45rem .8rem; cursor: pointer; border-radius: 6px; border: 1px solid #c8d0d8; background: #fff; }
+    button.primary { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    button.danger { background: #b42318; color: #fff; border-color: #b42318; }
+    table { border-collapse: collapse; width: 100%; margin: .6rem 0; font-size: .9rem; }
+    th, td { border: 1px solid #e2e6ea; padding: .4rem .55rem; text-align: left; }
+    th { background: #f0f3f7; }
+    form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; margin: .6rem 0; }
+    label { font-size: .8rem; color: #4b5563; display: flex; flex-direction: column; gap: .2rem; }
+    input, select { padding: .35rem .45rem; border: 1px solid #c8d0d8; border-radius: 6px; }
+    pre { background: #f4f6f8; padding: .8rem; overflow: auto; border-radius: 8px; max-height: 320px; font-size: .82rem; }
+    .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; }
+    .badge.frozen { background: #fee4e2; color: #b42318; }
+    .badge.active { background: #dcf5e7; color: #067647; }
+    .badge.open { background: #fff4e0; color: #b54708; }
+    .badge.closed { background: #dcf5e7; color: #067647; }
+    .note { color: #6b7280; font-size: .85rem; }
+    .actions { display: flex; gap: .35rem; flex-wrap: wrap; }
+    .result { margin-top: .5rem; font-size: .85rem; color: #067647; white-space: pre-wrap; }
+    .result.error { color: #b42318; }
   </style>
 </head>
 <body>
 <main>
-  <h1>证券结算与企业行动处理</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>证券结算与违约处置</h1>
+  <p class="note">失败单据转违约：未交付金额计为损失，先扣违约方保证金，不足部分按过去一个月成交占比向其余参与者分摊（每家最多扣到自身保证金余额）；未补足前违约方冻结，不能新建或交收，未完成单据可由他人接手。</p>
+  <div class="tabs">
+    <button data-tab="participants" class="active">参与者与保证金</button>
+    <button data-tab="records">结算单据</button>
+    <button data-tab="losses">违约损失与分摊</button>
+  </div>
+
+  <section id="participants" class="panel active">
+    <form id="register-form">
+      <label>参与者代码<input name="code" required placeholder="PART-A"></label>
+      <label>名称<input name="name" required placeholder="甲券商"></label>
+      <label>初始保证金<input name="initial_margin" type="number" step="0.01" value="100000"></label>
+      <button class="primary" type="submit">登记参与者</button>
+    </form>
+    <div class="actions"><button id="load-participants">刷新列表</button></div>
+    <table>
+      <thead><tr><th>代码</th><th>名称</th><th>状态</th><th>保证金余额</th><th>补缴保证金</th></tr></thead>
+      <tbody id="participant-rows"></tbody>
+    </table>
+    <pre id="participant-output">登记参与者或点击刷新。</pre>
+  </section>
+
+  <section id="records" class="panel">
+    <form id="create-form">
+      <label>reference<input name="reference" required placeholder="TRD-1"></label>
+      <label>证券<input name="instrument" value="ACME"></label>
+      <label>方向<select name="side"><option>buy</option><option>sell</option></select></label>
+      <label>数量<input name="quantity" type="number" value="1000"></label>
+      <label>价格<input name="price" type="number" step="0.01" value="12.5"></label>
+      <label>费用<input name="fees" type="number" step="0.01" value="18"></label>
+      <label>参与者<input name="participant" placeholder="PART-A"></label>
+      <button class="primary" type="submit">新建单据</button>
+    </form>
+    <div class="actions"><button id="load-records">刷新单据</button></div>
+    <table>
+      <thead><tr><th>ID</th><th>reference</th><th>状态</th><th>参与者</th><th>净额</th><th>版本</th><th>操作</th></tr></thead>
+      <tbody id="record-rows"></tbody>
+    </table>
+    <pre id="record-output">新建单据或点击刷新。</pre>
+  </section>
+
+  <section id="losses" class="panel">
+    <div class="actions"><button id="load-losses" class="primary">刷新损失案件</button></div>
+    <div id="loss-list"></div>
+  </section>
 </main>
+
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const headers = {"X-User-Id": "demo-admin", "X-Role": "admin", "X-Org": "demo", "Content-Type": "application/json"};
+const out = (id, data, error=false) => {
+  const el = document.getElementById(id);
+  el.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  el.className = error ? "error" : "";
+};
+async function api(path, method="GET", body=null) {
+  const response = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : undefined});
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) throw Object.assign(new Error(data.message || "请求失败"), {data});
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const money = v => Number(v || 0).toLocaleString("zh-CN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll("section.panel").forEach(p => p.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById(btn.dataset.tab).classList.add("active");
+});
+
+// ---- 参与者 ----
+async function loadParticipants() {
+  const data = await api("/api/participants");
+  document.getElementById("participant-rows").innerHTML = data.items.map(p => `
+    <tr>
+      <td>${esc(p.code)}</td><td>${esc(p.name)}</td>
+      <td><span class="badge ${p.status}">${p.status === "frozen" ? "冻结" : "正常"}</span></td>
+      <td>${money(p.margin_balance_amount)}</td>
+      <td><form class="topup-form" data-code="${esc(p.code)}" style="margin:0">
+        <input name="amount" type="number" step="0.01" value="50000" style="width:8rem">
+        <button type="submit">补缴</button></form></td>
+    </tr>`).join("");
+  out("participant-output", data);
+}
+document.getElementById("load-participants").onclick = () => loadParticipants().catch(e => out("participant-output", e.message, true));
+document.getElementById("register-form").onsubmit = async e => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target).entries());
+  try { await api("/api/participants", "POST", {data: {...f, initial_margin: Number(f.initial_margin)}}); await loadParticipants(); }
+  catch (err) { out("participant-output", err.message, true); }
+};
+document.getElementById("participant-rows").addEventListener("submit", async e => {
+  const form = e.target.closest(".topup-form");
+  if (!form) return;
+  e.preventDefault();
+  const amount = Number(new FormData(form).get("amount"));
+  try {
+    const p = await api(`/api/participants/${encodeURIComponent(form.dataset.code)}/margin-topup`, "POST", {data: {amount}});
+    out("participant-output", {margin_balance_amount: p.margin_balance_amount, status: p.status});
+    await loadParticipants();
+  } catch (err) { out("participant-output", err.message, true); }
+});
+
+// ---- 单据 ----
+async function loadRecords() {
+  const data = await api("/api/records?limit=50");
+  document.getElementById("record-rows").innerHTML = data.items.map(r => {
+    const p = r.payload || {};
+    let actions = "";
+    if (r.state === "captured" || r.state === "adjusted") {
+      actions += `<button data-id="${r.id}" data-v="${r.version}" data-act="approve">复核通过</button>`;
+    }
+    if (r.state === "captured" && p.corporate_action && p.corporate_action !== "none") {
+      actions += `<button data-id="${r.id}" data-v="${r.version}" data-act="apply_corporate">公司行动</button>`;
+    }
+    if (r.state === "approved") {
+      actions += `<button data-id="${r.id}" data-v="${r.version}" data-act="settle">交收</button>`;
+      actions += `<button class="danger" data-id="${r.id}" data-v="${r.version}" data-act="fail">标记失败</button>`;
+    }
+    if (r.state === "failed") {
+      actions += `<button class="danger" data-id="${r.id}" data-v="${r.version}" data-act="declare_default">声明违约并处置</button>`;
+    }
+    if (["captured", "adjusted", "approved"].includes(r.state)) {
+      actions += `<button data-id="${r.id}" data-v="${r.version}" data-act="takeover">转手他人</button>`;
+    }
+    return `<tr><td>${r.id}</td><td>${esc(r.reference)}</td><td>${esc(r.state)}</td>
+      <td>${esc(p.participant || "")}</td><td>${money(p.net_amount)}</td><td>${r.version}</td>
+      <td><div class="actions">${actions}</div></td></tr>`;
+  }).join("");
+  out("record-output", data);
+}
+document.getElementById("load-records").onclick = () => loadRecords().catch(e => out("record-output", e.message, true));
+document.getElementById("create-form").onsubmit = async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const data = {
+    instrument: f.get("instrument"), side: f.get("side"),
+    quantity: Number(f.get("quantity")), price: Number(f.get("price")),
+    fees: Number(f.get("fees")), currency: "CNY", settlement_day: 2,
+    corporate_action: "none", action_ratio: 1,
+  };
+  if (f.get("participant")) data.participant = f.get("participant");
+  try { await api("/api/records", "POST", {reference: f.get("reference"), data}); await loadRecords(); }
+  catch (err) { out("record-output", err.message, true); }
+};
+document.getElementById("record-rows").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const id = btn.dataset.id, version = Number(btn.dataset.v), act = btn.dataset.act;
+  try {
+    if (act === "takeover") {
+      const code = prompt("接手参与者代码");
+      if (!code) return;
+      const reason = prompt("接手原因") || "违约方冻结，未完成单据转手";
+      const rec = await api(`/api/records/${id}/takeover`, "POST", {expected_version: version, data: {new_participant: code, reason}});
+      out("record-output", rec);
+    } else if (act === "declare_default") {
+      const reason = prompt("违约原因") || "交收失败未补券款";
+      const lossCase = await api(`/api/records/${id}/default`, "POST", {expected_version: version, data: {fail_reason: reason}});
+      out("record-output", {loss_case: lossCase});
+      document.querySelector('.tabs button[data-tab="losses"]').click();
+      await loadLosses();
+    } else {
+      const payload = act === "fail" ? {fail_reason: "券款不足"}
+        : act === "settle" ? {delivered_quantity: null, cash_paid: null} : {};
+      if (act === "settle") {
+        // 交收需券款两清，这里仅作演示，按单据数量/净额自动填入
+        const recs = await api(`/api/records/${id}`);
+        const p = recs.payload;
+        payload.delivered_quantity = p.effective_quantity || p.adjusted_quantity || p.quantity;
+        payload.cash_paid = p.net_amount;
+      }
+      const rec = await api(`/api/records/${id}/actions/${act}`, "POST", {expected_version: version, data: payload});
+      out("record-output", rec);
+    }
+    await loadRecords();
+    await loadParticipants().catch(() => {});
+  } catch (err) { out("record-output", err.message, true); }
+});
+
+// ---- 违约损失 ----
+function lossCard(c) {
+  const lc = c.loss_composition;
+  const allocRows = c.allocations.map(a => `
+    <tr><td>${esc(a.participant)}</td>
+      <td>${money(a.weight_amount)}</td><td>${(a.ratio * 100).toFixed(4)}%</td>
+      <td>${money(a.allocated_amount)}</td><td>${money(a.balance_after)}</td></tr>`).join("");
+  const recoveries = c.recoveries.map(rv =>
+    `<li>${esc(rv.created_at)} · ${esc(rv.participant)} 补缴 ${money(rv.amount)}</li>`).join("");
+  const basis = c.basis === "equal" ? "窗口内无成交，按人数均摊" : "过去一个月成交额占比";
+  return `<div style="border:1px solid #e2e6ea;border-radius:10px;padding:.9rem;margin:.8rem 0">
+    <h3 style="margin:.1rem 0">损失案件 #${c.id} · 单据 ${c.record_id} · 违约方 ${esc(c.defaulter)}
+      <span class="badge ${c.state}">${c.state === "closed" ? "已结清" : "未结清"}</span></h3>
+    <p class="note">权重依据：${basis}；成交权重合计 ${money(c.total_weight_amount)}</p>
+    <h4>损失构成</h4>
+    <table><thead><tr><th>未交付损失</th><th>违约方保证金赔付</th><th>需分摊缺口</th><th>已向他人分摊</th><th>仍未弥补</th></tr></thead>
+      <tbody><tr><td>${money(lc.loss_amount)}</td><td>${money(lc.defaulter_cover)}</td>
+      <td>${money(lc.shortfall_amount)}</td><td>${money(lc.allocated_amount)}</td>
+      <td><b>${money(lc.outstanding_amount)}</b></td></tr></tbody></table>
+    <h4>分摊明细</h4>
+    <table><thead><tr><th>参与者</th><th>一个月成交额</th><th>占比</th><th>分摊扣减</th><th>扣后保证金</th></tr></thead>
+      <tbody>${allocRows || "<tr><td colspan=5>无</td></tr>"}</tbody></table>
+    <h4>恢复（补缴）记录</h4>
+    <ul>${recoveries || "<li>暂无补缴</li>"}</ul>
+    ${c.state === "open" ? `<form class="recover-form" data-id="${c.id}" style="margin:0">
+      <label>补缴金额（未弥补 ${money(lc.outstanding_amount)}）<input name="amount" type="number" step="0.01" value="${lc.outstanding_amount}"></label>
+      <button class="primary" type="submit">违约方补缴并恢复</button></form>
+      <div class="result" id="recovery-result-${c.id}"></div>` : "<p class=note>已补足，违约方已恢复新建与交收资格。</p>"}
+  </div>`;
+}
+async function loadLosses() {
+  const data = await api("/api/loss-cases");
+  document.getElementById("loss-list").innerHTML = data.items.map(lossCard).join("") || "<p class=note>暂无损失案件。</p>";
+}
+document.getElementById("load-losses").onclick = () => loadLosses().catch(e => out("loss-list", e.message, true));
+document.getElementById("loss-list").addEventListener("submit", async e => {
+  const form = e.target.closest(".recover-form");
+  if (!form) return;
+  e.preventDefault();
+  const id = form.dataset.id;
+  const amount = Number(new FormData(form).get("amount"));
+  const el = document.getElementById(`recovery-result-${id}`);
+  try {
+    const c = await api(`/api/loss-cases/${id}/recover`, "POST", {data: {amount}});
+    const rr = c.recovery_result || {};
+    el.textContent = (rr.restored ? "✅ 损失已全部补足，违约方已恢复正常状态。\n" : "部分补缴，违约方仍处于冻结状态。\n")
+      + `本次补缴 ${money(rr.paid_amount)}，剩余未弥补 ${money(rr.outstanding_amount)}，当前状态 ${rr.defaulter_status}`;
+    await loadLosses();
+    await loadParticipants().catch(() => {});
+  } catch (err) { el.textContent = err.message; el.className = "result error"; }
+});
+
+loadParticipants().catch(() => {});
+loadRecords().catch(() => {});
+loadLosses().catch(() => {});
 </script>
 </body>
 </html>

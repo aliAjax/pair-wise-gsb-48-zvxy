@@ -12,6 +12,13 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+DEFAULT_RE = re.compile(r"^/api/records/(\d+)/default$")
+TAKEOVER_RE = re.compile(r"^/api/records/(\d+)/takeover$")
+LOSS_RE = re.compile(r"^/api/loss-cases/(\d+)$")
+RECOVER_RE = re.compile(r"^/api/loss-cases/(\d+)/recover$")
+PARTICIPANT_RE = re.compile(r"^/api/participants/([^/]+)$")
+PARTICIPANT_LEDGER_RE = re.compile(r"^/api/participants/([^/]+)/margin-ledger$")
+MARGIN_TOPUP_RE = re.compile(r"^/api/participants/([^/]+)/margin-topup$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +94,37 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/participants":
+                    self._send(200, {"items": service.list_participants(self._actor())})
+                    return
+                match = PARTICIPANT_LEDGER_RE.match(parsed.path)
+                if match:
+                    query = parse_qs(parsed.query)
+                    items = service.margin_ledger(
+                        self._actor(), match.group(1), int(query.get("limit", ["200"])[0])
+                    )
+                    self._send(200, {"items": items})
+                    return
+                match = PARTICIPANT_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_participant(self._actor(), match.group(1)))
+                    return
+                if parsed.path == "/api/margin-ledger":
+                    query = parse_qs(parsed.query)
+                    items = service.margin_ledger(
+                        self._actor(), query.get("participant", [None])[0], int(query.get("limit", ["200"])[0])
+                    )
+                    self._send(200, {"items": items})
+                    return
+                if parsed.path == "/api/loss-cases":
+                    query = parse_qs(parsed.query)
+                    state = query.get("state", [None])[0]
+                    self._send(200, {"items": service.list_loss_cases(self._actor(), state)})
+                    return
+                match = LOSS_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_loss_case(self._actor(), int(match.group(1))))
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -99,17 +137,61 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
                     return
+                if parsed.path == "/api/participants":
+                    participant = service.register_participant(self._actor(), body.get("data", body))
+                    self._send(201, participant)
+                    return
+                match = DEFAULT_RE.match(parsed.path)
+                if match:
+                    version = self._expected_version(body)
+                    case = service.declare_default(
+                        self._actor(), int(match.group(1)), version, body.get("data", {})
+                    )
+                    self._send(201, case)
+                    return
+                match = TAKEOVER_RE.match(parsed.path)
+                if match:
+                    version = self._expected_version(body)
+                    data = body.get("data", {})
+                    record = service.takeover(
+                        self._actor(),
+                        int(match.group(1)),
+                        version,
+                        data.get("new_participant", body.get("new_participant", "")),
+                        data.get("reason", body.get("reason", "")),
+                    )
+                    self._send(200, record)
+                    return
+                match = RECOVER_RE.match(parsed.path)
+                if match:
+                    case = service.recover_default(
+                        self._actor(), int(match.group(1)), body.get("data", body)
+                    )
+                    self._send(200, case)
+                    return
+                match = MARGIN_TOPUP_RE.match(parsed.path)
+                if match:
+                    participant = service.topup_margin(
+                        self._actor(), match.group(1), body.get("data", body)
+                    )
+                    self._send(200, participant)
+                    return
                 match = ACTION_RE.match(parsed.path)
                 if match:
-                    version = body.get("expected_version")
-                    if not isinstance(version, int):
-                        raise ValidationError("expected_version必须是整数")
+                    version = self._expected_version(body)
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
+
+        @staticmethod
+        def _expected_version(body: Dict[str, Any]) -> int:
+            version = body.get("expected_version")
+            if not isinstance(version, int):
+                raise ValidationError("expected_version必须是整数")
+            return version
 
     return Handler
 

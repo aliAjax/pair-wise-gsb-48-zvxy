@@ -6,8 +6,8 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 
 INITIAL_STATE = "captured"
 CREATE_ROLES = {'trader'}
-ACTION_ROLES = {'apply_corporate': {'corporate_actions'}, 'approve': {'settlement_officer'}, 'settle': {'settlement_officer'}, 'fail': {'settlement_officer'}, 'reverse': {'corporate_actions', 'settlement_officer'}}
-TRANSITIONS = {'apply_corporate': {'captured': 'adjusted'}, 'approve': {'captured': 'approved', 'adjusted': 'approved'}, 'settle': {'approved': 'settled'}, 'fail': {'approved': 'failed'}, 'reverse': {'settled': 'reversed', 'failed': 'reversed'}}
+ACTION_ROLES = {'apply_corporate': {'corporate_actions'}, 'approve': {'settlement_officer'}, 'settle': {'settlement_officer'}, 'fail': {'settlement_officer'}, 'declare_default': {'settlement_officer'}, 'reverse': {'corporate_actions', 'settlement_officer'}}
+TRANSITIONS = {'apply_corporate': {'captured': 'adjusted'}, 'approve': {'captured': 'approved', 'adjusted': 'approved'}, 'settle': {'approved': 'settled'}, 'fail': {'approved': 'failed'}, 'declare_default': {'failed': 'defaulted'}, 'reverse': {'settled': 'reversed', 'failed': 'reversed'}}
 
 
 class DomainRules:
@@ -36,6 +36,8 @@ class DomainRules:
         integer(p, "settlement_day", 0)
         choice(p, "corporate_action", ["none", "split", "dividend", "merger"])
         number(p, "action_ratio", 0.01)
+        if "participant" in p and p["participant"] is not None:
+            text(p, "participant")
         return p
 
     def prepare_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,6 +97,9 @@ class DomainRules:
         elif action == "fail":
             changes["fail_reason"] = text(data, "fail_reason")
             summary = "交收失败"
+        elif action == "declare_default":
+            changes["default_reason"] = text(data, "fail_reason") if data.get("fail_reason") else p.get("fail_reason", "")
+            summary = "交收失败转违约处置"
         elif action == "reverse":
             changes["reverse_reason"] = text(data, "reverse_reason")
             summary = "交收冲正"
