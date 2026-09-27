@@ -6,28 +6,143 @@
   <title>证券结算与企业行动处理</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
+    main { max-width: 1080px; margin: auto; }
     button { padding: .55rem .9rem; cursor: pointer; }
+    input, select { padding: .4rem; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    section { border: 1px solid #dde3ea; border-radius: 10px; padding: 1rem 1.2rem; margin: 1.2rem 0; }
+    table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+    th, td { border: 1px solid #dde3ea; padding: .4rem .6rem; text-align: left; font-size: .92rem; }
+    th { background: #f4f6f8; }
+    .tag { padding: .1rem .5rem; border-radius: 10px; font-size: .85rem; }
+    .ok { background: #e2f5e9; color: #146c2e; }
+    .bad { background: #fde7e9; color: #a6121f; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+    h2 { font-size: 1.1rem; margin: .2rem 0 .6rem; }
+    h3 { font-size: 1rem; margin: 1rem 0 .4rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>证券结算与企业行动处理</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <p>演示页：交收失败自动进入违约处置——未交付金额转成损失，先扣违约方保证金，缺口按过去一个月成交占比向其余参与者分摊（每家以其保证金余额为限）；未补足前违约方不能新建或交收，其未完成单据可由他人接手。</p>
+
+  <section>
+    <h2>参与者与保证金</h2>
+    <div class="row">
+      <input id="p-id" placeholder="参与者编号" size="10">
+      <input id="p-name" placeholder="名称" size="10">
+      <input id="p-margin" placeholder="初始保证金" size="10" type="number">
+      <button id="p-register">注册参与者</button>
+      <span>|</span>
+      <input id="m-id" placeholder="参与者编号" size="10">
+      <input id="m-amount" placeholder="金额" size="8" type="number">
+      <select id="m-kind"><option value="deposit">存入</option><option value="withdraw">提取</option></select>
+      <button id="m-adjust">调整保证金</button>
+      <button id="p-reload">刷新</button>
+    </div>
+    <table id="participants"><thead><tr><th>编号</th><th>名称</th><th>保证金余额</th><th>状态</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>违约处置案件</h2>
+    <div class="row"><button id="d-reload">刷新案件</button></div>
+    <table id="cases"><thead><tr><th>案件</th><th>单据</th><th>违约方</th><th>损失</th><th>已分摊</th><th>未补足</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="case-detail" style="display:none">
+      <div class="grid">
+        <div>
+          <h3>损失构成</h3>
+          <table id="loss"><tbody></tbody></table>
+          <h3>恢复结果</h3>
+          <table id="recovery"><tbody></tbody></table>
+          <button id="recover">执行恢复处置</button>
+        </div>
+        <div>
+          <h3>分摊明细</h3>
+          <table id="allocations"><thead><tr><th>轮次</th><th>参与者</th><th>成交占比</th><th>分摊金额</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>结算记录</h2>
+    <div class="row"><button id="load">加载记录</button><button id="stats">状态统计</button></div>
+    <pre id="output">点击上方按钮读取服务状态。</pre>
+  </section>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"CCP"};
+const jsonHeaders = Object.assign({"Content-Type":"application/json"}, headers);
+const $ = id => document.getElementById(id);
+const money = v => Number(v).toFixed(2);
+const tag = (ok, yes, no) => `<span class="tag ${ok ? "ok" : "bad"}">${ok ? yes : no}</span>`;
+
+async function api(path, options) {
+  const response = await fetch(path, options);
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) { alert(data.message || "请求失败"); throw new Error(data.message); }
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+
+async function loadParticipants() {
+  const data = await api("/api/participants", {headers});
+  $("participants").querySelector("tbody").innerHTML = data.items.map(p =>
+    `<tr><td>${p.participant_id}</td><td>${p.name}</td><td>${money(p.margin_balance)}</td><td>${tag(p.status === "active", "正常", "暂停")}</td></tr>`
+  ).join("") || `<tr><td colspan="4">暂无参与者</td></tr>`;
+}
+
+async function loadCases() {
+  const data = await api("/api/defaults", {headers});
+  $("cases").querySelector("tbody").innerHTML = data.items.map(c =>
+    `<tr><td>#${c.id}</td><td>${c.reference}</td><td>${c.defaulter_id}</td><td>${money(c.loss_amount)}</td>` +
+    `<td>${money(c.allocated_total)}</td><td>${money(c.uncovered_amount)}</td>` +
+    `<td>${tag(c.status === "recovered", "已补足", "未补足")}</td>` +
+    `<td><button onclick="showCase(${c.id})">详情</button></td></tr>`
+  ).join("") || `<tr><td colspan="8">暂无违约案件</td></tr>`;
+}
+
+let currentCase = null;
+async function showCase(id) {
+  const d = await api("/api/defaults/" + id, {headers});
+  currentCase = id;
+  $("case-detail").style.display = "block";
+  const rows = [["单据", d.loss.reference], ["违约方", d.loss.defaulter_id], ["应交付金额", money(d.loss.due_amount)],
+    ["已交付资金", money(d.loss.cash_paid)], ["损失金额", money(d.loss.loss_amount)],
+    ["违约方保证金抵扣", money(d.loss.defaulter_margin_used)], ["向其余参与者分摊", money(d.loss.allocated_total)],
+    ["未补足缺口", money(d.loss.uncovered_amount)]];
+  $("loss").querySelector("tbody").innerHTML = rows.map(r => `<tr><th>${r[0]}</th><td>${r[1]}</td></tr>`).join("");
+  const rec = [["处置状态", tag(d.recovery.recovered, "已补足", "未补足")],
+    ["累计追回", money(d.recovery.recovered_amount)], ["剩余缺口", money(d.recovery.remaining_amount)]];
+  $("recovery").querySelector("tbody").innerHTML = rec.map(r => `<tr><th>${r[0]}</th><td>${r[1]}</td></tr>`).join("");
+  $("recover").disabled = d.recovery.recovered;
+  $("allocations").querySelector("tbody").innerHTML = d.allocations.map(a =>
+    `<tr><td>${a.round}</td><td>${a.participant_id}</td><td>${(a.share_ratio * 100).toFixed(2)}%</td><td>${money(a.amount)}</td></tr>`
+  ).join("") || `<tr><td colspan="4">无分摊记录</td></tr>`;
+}
+
+$("p-register").onclick = async () => {
+  await api("/api/participants", {method: "POST", headers: jsonHeaders, body: JSON.stringify({
+    participant_id: $("p-id").value, name: $("p-name").value, margin_balance: Number($("p-margin").value || 0)})});
+  loadParticipants();
+};
+$("m-adjust").onclick = async () => {
+  await api("/api/participants/" + encodeURIComponent($("m-id").value) + "/margin", {method: "POST", headers: jsonHeaders,
+    body: JSON.stringify({kind: $("m-kind").value, amount: Number($("m-amount").value || 0)})});
+  loadParticipants();
+};
+$("p-reload").onclick = loadParticipants;
+$("d-reload").onclick = loadCases;
+$("recover").onclick = async () => {
+  if (!currentCase) return;
+  await api("/api/defaults/" + currentCase + "/recover", {method: "POST", headers: jsonHeaders, body: "{}"});
+  showCase(currentCase); loadCases(); loadParticipants();
+};
+$("load").onclick = async () => { $("output").textContent = JSON.stringify(await api("/api/records?limit=20", {headers}), null, 2); };
+$("stats").onclick = async () => { $("output").textContent = JSON.stringify(await api("/api/stats", {headers}), null, 2); };
+
+loadParticipants(); loadCases();
 </script>
 </body>
 </html>

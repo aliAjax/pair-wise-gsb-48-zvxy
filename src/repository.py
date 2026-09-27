@@ -33,6 +33,7 @@ class Repository:
                     state TEXT NOT NULL,
                     version INTEGER NOT NULL DEFAULT 1,
                     payload TEXT NOT NULL,
+                    org TEXT NOT NULL DEFAULT '',
                     created_by TEXT NOT NULL,
                     updated_by TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -51,6 +52,11 @@ class Repository:
                 CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_events(record_id, id);
                 """
             )
+            # 老库迁移：补充参与者(org)列
+            try:
+                connection.execute("ALTER TABLE records ADD COLUMN org TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
 
     @staticmethod
     def _row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -58,13 +64,13 @@ class Repository:
         item["payload"] = json.loads(item["payload"])
         return item
 
-    def create(self, reference: str, state: str, payload: Dict[str, Any], actor_id: str) -> Dict[str, Any]:
+    def create(self, reference: str, state: str, payload: Dict[str, Any], actor_id: str, org: str = "") -> Dict[str, Any]:
         now = _now()
         try:
             with self._connect() as connection:
                 cursor = connection.execute(
-                    "INSERT INTO records(reference,state,version,payload,created_by,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                    (reference, state, 1, json.dumps(payload, ensure_ascii=False, sort_keys=True), actor_id, actor_id, now, now),
+                    "INSERT INTO records(reference,state,version,payload,org,created_by,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (reference, state, 1, json.dumps(payload, ensure_ascii=False, sort_keys=True), org, actor_id, actor_id, now, now),
                 )
                 record_id = int(cursor.lastrowid)
                 connection.execute(
@@ -92,7 +98,7 @@ class Repository:
                 rows = connection.execute("SELECT * FROM records ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [self._row(row) for row in rows]
 
-    def mutate(self, record_id: int, expected_version: int, state: str, payload: Dict[str, Any], actor_id: str, action: str, details: Dict[str, Any]) -> Dict[str, Any]:
+    def mutate(self, record_id: int, expected_version: int, state: str, payload: Dict[str, Any], actor_id: str, action: str, details: Dict[str, Any], org: Optional[str] = None) -> Dict[str, Any]:
         now = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -104,10 +110,16 @@ class Repository:
                 connection.rollback()
                 raise Conflict("版本冲突，请刷新后重试")
             version = int(expected_version) + 1
-            connection.execute(
-                "UPDATE records SET state=?,version=?,payload=?,updated_by=?,updated_at=? WHERE id=?",
-                (state, version, json.dumps(payload, ensure_ascii=False, sort_keys=True), actor_id, now, record_id),
-            )
+            if org is None:
+                connection.execute(
+                    "UPDATE records SET state=?,version=?,payload=?,updated_by=?,updated_at=? WHERE id=?",
+                    (state, version, json.dumps(payload, ensure_ascii=False, sort_keys=True), actor_id, now, record_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE records SET state=?,version=?,payload=?,org=?,updated_by=?,updated_at=? WHERE id=?",
+                    (state, version, json.dumps(payload, ensure_ascii=False, sort_keys=True), org, actor_id, now, record_id),
+                )
             connection.execute(
                 "INSERT INTO audit_events(record_id,action,actor_id,version,details,created_at) VALUES(?,?,?,?,?,?)",
                 (record_id, action, actor_id, version, json.dumps(details, ensure_ascii=False, sort_keys=True), now),

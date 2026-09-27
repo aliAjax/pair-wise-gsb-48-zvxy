@@ -3,6 +3,8 @@ import argparse
 from pathlib import Path
 
 from src.audit import AuditRecorder
+from src.default_repository import DefaultRepository
+from src.default_service import DefaultService
 from src.http_api import create_server
 from src.repository import Repository
 from src.rules import DomainRules
@@ -17,7 +19,9 @@ DEFAULT_PORT = 8324
 def build_service(db_path: str) -> Service:
     repository = Repository(db_path)
     audit = AuditRecorder(repository)
-    return Service(repository, DomainRules(), audit)
+    rules = DomainRules()
+    defaults = DefaultService(repository, DefaultRepository(db_path), rules)
+    return Service(repository, rules, audit, defaults)
 
 
 def parse_args():
@@ -32,7 +36,7 @@ def main() -> None:
     args = parse_args()
     Path(args.db).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     service = build_service(args.db)
-    server = create_server(args.host, args.port, service, BASE_DIR / "static")
+    server = create_server(args.host, args.port, service, BASE_DIR / "static", service.defaults)
     print("证券结算与企业行动处理 listening on http://%s:%s" % (args.host, args.port), flush=True)
     try:
         server.serve_forever()
